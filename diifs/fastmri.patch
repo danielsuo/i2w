@@ -1,0 +1,103 @@
+diff --git a/fastmri/models/unet.py b/fastmri/models/unet.py
+index e46a418..d4c0222 100644
+--- a/fastmri/models/unet.py
++++ b/fastmri/models/unet.py
+@@ -62,9 +62,9 @@ class Unet(nn.Module):
+         self.up_conv.append(
+             nn.Sequential(
+                 ConvBlock(ch * 2, ch, drop_prob),
+-                nn.Conv2d(ch, self.out_chans, kernel_size=1, stride=1),
+             )
+         )
++        self.final_conv = nn.Conv2d(ch, self.out_chans, kernel_size=1, stride=1)
+ 
+     def forward(self, image: torch.Tensor) -> torch.Tensor:
+         """
+@@ -84,7 +84,8 @@ class Unet(nn.Module):
+             output = F.avg_pool2d(output, kernel_size=2, stride=2, padding=0)
+ 
+         output = self.conv(output)
+-
++        
++        outputs = []
+         # apply up-sampling layers
+         for transpose_conv, conv in zip(self.up_transpose_conv, self.up_conv):
+             downsample_layer = stack.pop()
+@@ -101,6 +102,10 @@ class Unet(nn.Module):
+ 
+             output = torch.cat([output, downsample_layer], dim=1)
+             output = conv(output)
++            outputs.append(output)
++        
++        output = self.final_conv(output)
++        outputs.append(output)
+ 
+         return output
+ 
+diff --git a/fastmri/pl_modules/data_module.py b/fastmri/pl_modules/data_module.py
+index bde1d6c..3b8a15d 100644
+--- a/fastmri/pl_modules/data_module.py
++++ b/fastmri/pl_modules/data_module.py
+@@ -260,7 +260,6 @@ class FastMriDataModule(pl.LightningDataModule):
+             num_workers=self.num_workers,
+             worker_init_fn=worker_init_fn,
+             sampler=sampler,
+-            shuffle=is_train if sampler is None else False,
+         )
+ 
+         return dataloader
+diff --git a/fastmri_examples/unet/train_unet_demo.py b/fastmri_examples/unet/train_unet_demo.py
+index 6e17f8b..83c03fb 100644
+--- a/fastmri_examples/unet/train_unet_demo.py
++++ b/fastmri_examples/unet/train_unet_demo.py
+@@ -26,6 +26,7 @@ def cli_main(args):
+     mask = create_mask_for_mask_type(
+         args.mask_type, args.center_fractions, args.accelerations
+     )
++    mask=None
+     # use random masks for train transform, fixed masks for val transform
+     train_transform = UnetDataTransform(args.challenge, mask_func=mask, use_seed=False)
+     val_transform = UnetDataTransform(args.challenge, mask_func=mask)
+@@ -80,8 +81,8 @@ def build_args():
+     parser = ArgumentParser()
+ 
+     # basic args
+-    path_config = pathlib.Path("../../fastmri_dirs.yaml")
+-    num_gpus = 2
++    path_config = pathlib.Path("../fastmri_dirs.yaml")
++    num_gpus = 8
+     backend = "ddp"
+     batch_size = 1 if backend == "ddp" else num_gpus
+ 
+@@ -179,6 +180,7 @@ def build_args():
+ 
+ def run_cli():
+     args = build_args()
++    print(args)
+ 
+     # ---------------------
+     # RUN TRAINING
+diff --git a/fastmri_examples/unet/unet_reproduce_20201111.py/unet_knee_sc_leaderboard.py b/fastmri_examples/unet/unet_reproduce_20201111.py/unet_knee_sc_leaderboard.py
+index 767b9b7..a0c1435 100644
+--- a/fastmri_examples/unet/unet_reproduce_20201111.py/unet_knee_sc_leaderboard.py
++++ b/fastmri_examples/unet/unet_reproduce_20201111.py/unet_knee_sc_leaderboard.py
+@@ -83,7 +83,7 @@ def build_args():
+     # basic args
+     path_config = pathlib.Path("../../fastmri_dirs.yaml")
+     backend = "ddp"
+-    num_gpus = 32
++    num_gpus = 8
+     batch_size = 1
+ 
+     # set defaults based on optional directory config
+@@ -168,9 +168,8 @@ def build_args():
+         checkpoint_dir.mkdir(parents=True)
+ 
+     args.checkpoint_callback = pl.callbacks.ModelCheckpoint(
+-        filepath=checkpoint_dir,
++        dirpath=checkpoint_dir,
+         verbose=True,
+-        prefix="",
+     )
+ 
+     # set default checkpoint if one exists in our checkpoint directory
